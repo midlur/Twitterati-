@@ -23,64 +23,73 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.IntegerSerializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import twitter4j.*;
-import twitter4j.auth.AccessToken;
+import twitter4j.conf.ConfigurationBuilder;
 
 import java.util.Properties;
-import java.util.Scanner;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
 
-public class Producer extends Thread {
+public class Producer extends Thread{
     private final KafkaProducer<Integer, String> producer;
     private final String topic;
-    private final Boolean isAsync;
-    private final Twitter twitter;
 
-    public Producer(String topic, Boolean isAsync,Twitter twitter) {
+    public Producer(String topic) {
         Properties props = new Properties();
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, KafkaProperties.KAFKA_SERVER_URL + ":" + KafkaProperties.KAFKA_SERVER_PORT);
         props.put(ProducerConfig.CLIENT_ID_CONFIG, "DemoProducer");
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, IntegerSerializer.class.getName());
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
-        props.put(ProducerConfig.ACKS_CONFIG, "1");
         producer = new KafkaProducer<>(props);
         this.topic = topic;
-        this.isAsync = isAsync;
-        this.twitter = twitter;
     }
 
     public void run() {
 
-        int messageNo = 1;
-        try {
-            ResponseList<Status> statusResponseList;
+        ConfigurationBuilder cb = new ConfigurationBuilder();
+        cb.setDebugEnabled(true).setOAuthConsumerKey(UserProperties.ConsumerKey)
+                .setOAuthConsumerSecret(UserProperties.ConsumerSecretKey)
+                .setOAuthAccessToken(UserProperties.AccessToken)
+                .setOAuthAccessTokenSecret(UserProperties.AccessTokenSecret);
 
-            while (!(statusResponseList = twitter.getHomeTimeline(new Paging(10,10))).isEmpty()) {
-                for (Status status : statusResponseList) {
-                    System.out.println(status.getText() + " " + messageNo + " " + status.getUser().getName());
-                    long startTime = System.currentTimeMillis();
-                    if (isAsync) { // Send asynchronously
-                        producer.send(new ProducerRecord<>(topic,
-                                messageNo,
-                                status.getText()), new DemoCallBack(startTime, messageNo, status.getText()));
-                    } else { // Send synchronously
-                        try {
+        TwitterStream twitterStream = new TwitterStreamFactory(cb.build())
+                .getInstance();
+
+        StatusListener listener = new StatusListener() {
+            int messageNo = 1;
+            @Override
+            public void onStatus(Status status) {
+               // System.out.println(status.getUser().getName() + " username");
+                String messageInfo = status.getText() + "!@#%&" + status.getUser().getName();
+                    if (status.getLang().equalsIgnoreCase("en")) {
+                        System.out.println(messageNo + " - " + status.getText());
                             producer.send(new ProducerRecord<>(topic,
                                     messageNo,
-                                    status.getText())).get();
-                            System.out.println("Sent message: (" + messageNo + ", " + status.getText() + ")");
-                        } catch (InterruptedException | ExecutionException e) {
-                            e.printStackTrace();
-                        }
+                                    messageInfo), new DemoCallBack(messageNo, status.getText()));
+                        messageNo++;
                     }
-                    ++messageNo;
-                }
-
             }
 
-            }catch(Exception e){
-
+            @Override
+            public void onDeletionNotice(StatusDeletionNotice statusDeletionNotice) {
             }
+
+            @Override
+            public void onTrackLimitationNotice(int numberOfLimitedStatuses) {
+            }
+
+            @Override
+            public void onScrubGeo(long userId, long upToStatusId) {
+            }
+
+            @Override
+            public void onStallWarning(StallWarning warning) {
+            }
+
+            @Override
+            public void onException(Exception ex) {
+                ex.printStackTrace();
+            }
+        };
+        twitterStream.addListener(listener);
+        twitterStream.sample();
     }
 }
 
@@ -88,12 +97,10 @@ class
 
 DemoCallBack implements Callback {
 
-    private final long startTime;
     private final int key;
     private final String message;
 
-    public DemoCallBack(long startTime, int key, String message) {
-        this.startTime = startTime;
+    public DemoCallBack( int key, String message) {
         this.key = key;
         this.message = message;
     }
@@ -108,12 +115,12 @@ DemoCallBack implements Callback {
      * @param exception The exception thrown during processing of this record. Null if no error occurred.
      */
     public void onCompletion(RecordMetadata metadata, Exception exception) {
-        long elapsedTime = System.currentTimeMillis() - startTime;
         if (metadata != null) {
-            System.out.println(
-                "message(" + key + ", " + message + ") sent to partition(" + metadata.partition() +
-                    "), " +
-                    "offset(" + metadata.offset() + ") in " + elapsedTime + " ms");
+            System.out.println("Sent Successfully");
+//            System.out.println(
+//                "message(" + key + ", " + message + ") sent to partition(" + metadata.partition() +
+//                    "), " +
+//                    "offset(" + metadata.offset() );
         } else {
             exception.printStackTrace();
         }
